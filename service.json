@@ -1,0 +1,5 @@
+{
+  "feed_url": "https://input.reai.group/v1/public/feed",
+  "meta_url": "https://input.reai.group/v1/public/meta",
+  "timeout_seconds": 20
+}
