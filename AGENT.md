@@ -9,7 +9,9 @@ Follow ScoutX 是一个可安装的 agent skill，用于从中心化 ScoutX publ
 核心原则：
 
 - 终端用户通过自然语言配置频率、时间、主题、语言、摘要风格和投递目标。
+- 终端用户可以选择 `ScoutX` 定制优质媒体源、一手信息源（X 平台与播客），或两者都看。
 - 终端用户不应该被要求配置 `BASE_URL`、API token、feed endpoint 或 raw JSON filter。
+- 终端用户不应该被要求配置 X bearer token、播客 RSS 或转写服务 API key。
 - ScoutX 后端负责集中采集和清洗内容；本仓库的 skill 只负责本地偏好、拉取、筛选、摘要输出和 OpenClaw cron 辅助。
 - OpenClaw recurring delivery 应优先使用 `follow_scoutx.py deliver` 输出 stdout，再由 OpenClaw `--announce --channel <channel> --to <target>` 完成真正投递。
 
@@ -21,6 +23,8 @@ Follow ScoutX 是一个可安装的 agent skill，用于从中心化 ScoutX publ
 - `service.json`: 打包时随 skill 分发的中心服务地址。
 - `prompts/digest_intro.md`: digest 总体写作要求。
 - `prompts/summarize_content.md`: 单条内容摘要要求。
+- `prompts/summarize_tweets.md`: X 平台一手信息源摘要要求。
+- `prompts/summarize_podcast.md`: 播客一手信息源摘要要求。
 - `prompts/translate.md`: 翻译要求。
 
 ## 本地状态
@@ -55,11 +59,24 @@ python3 scripts/follow_scoutx.py configure \
   --frequency daily \
   --time 09:00 \
   --language zh-CN \
+  --source-mode scoutx \
   --delivery-channel in_chat \
   --topics "AI Agent,编程工具" \
   --keywords-include "OpenAI,Anthropic,Cursor" \
   --max-items 8 \
   --length short
+```
+
+切换为一手信息源：
+
+```bash
+python3 scripts/follow_scoutx.py configure --source-mode first_party
+```
+
+同时使用 ScoutX 定制优质媒体源、X 平台和播客：
+
+```bash
+python3 scripts/follow_scoutx.py configure --source-types "scoutx,x,podcast"
 ```
 
 查看当前 profile：
@@ -108,6 +125,7 @@ python3 scripts/follow_scoutx.py install-openclaw-cron --apply
 
 - 优先保持 Python 标准库实现，除非有明确理由引入依赖。
 - 不要把后端服务地址、token、raw filter 等配置暴露给普通用户流程。
+- 不要让普通用户配置 X API、播客 RSS、podcast transcript 服务；这些属于中心 feed/operator 责任。
 - 如果 `service.json` 指向 placeholder 域名，应把它视为 operator packaging 问题，不要向终端用户索要 feed URL。
 - 修改 OpenClaw cron 逻辑时，保持 Feishu 外部投递必须使用明确的 `--channel feishu --to <target>`。
 - 不要把 Feishu 定时任务配置成 `delivery.mode=session` + `sessionTarget=isolated`；isolated session 没有可继承的当前聊天通道。

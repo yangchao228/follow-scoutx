@@ -11,7 +11,8 @@ Use this skill to give the user a personalized ScoutX digest with the same produ
 - the user installs a skill in OpenClaw or Claude Code
 - setup happens through conversation
 - the user's preferences are stored locally
-- each manual run or scheduled run pulls fresh content from the ScoutX public feed at execution time
+- each manual run or scheduled run pulls fresh content from the user's selected feeds at execution time
+- users can choose the curated ScoutX media feed, first-party sources (X + podcasts), or both
 - the user should not be asked for backend URLs or raw API tokens during normal setup
 - in OpenClaw, recurring delivery should output the digest to stdout and use `--announce --channel <channel> --to <target>` for the actual chat/channel delivery
 
@@ -40,6 +41,8 @@ The end user should only configure:
 - time
 - language
 - content interests
+- source selection: ScoutX curated media, first-party sources, or both
+- first-party source selection: X, podcasts, or both
 - digest style
 
 The end user should not configure:
@@ -47,6 +50,8 @@ The end user should not configure:
 - `BASE_URL`
 - `API_TOKEN`
 - feed endpoint details
+- X API tokens
+- podcast RSS or transcript service keys
 - raw JSON filters
 
 Developer-only overrides may exist in the helper script, but do not surface them to normal users unless you are explicitly debugging the skill itself.
@@ -79,6 +84,8 @@ Important files:
 - `service.json` in `~/.follow_scoutx/` for local endpoint override
 - `prompts/digest_intro.md`
 - `prompts/summarize_content.md`
+- `prompts/summarize_tweets.md`
+- `prompts/summarize_podcast.md`
 - `prompts/translate.md`
 
 ## Workflow
@@ -99,6 +106,8 @@ Ask only for the user-facing preferences:
 
 - daily or weekly
 - what time
+- whether to use ScoutX curated media, first-party sources, or both
+- if using first-party sources, whether to include X, podcasts, or both
 - what topics or companies to follow
 - preferred language
 - summary style
@@ -129,6 +138,7 @@ python3 scripts/follow_scoutx.py configure \
   --frequency daily \
   --time 09:00 \
   --language zh-CN \
+  --source-mode scoutx \
   --delivery-channel in_chat \
   --topics "AI Agent,编程工具" \
   --keywords-include "OpenAI,Anthropic,Cursor" \
@@ -142,8 +152,17 @@ python3 scripts/follow_scoutx.py configure \
   --days mon,thu \
   --time 09:00 \
   --language bilingual \
+  --source-types "scoutx,x,podcast" \
   --delivery-channel feishu \
   --delivery-target "ou_xxx" \
+  --topics "AI Agent,模型发布"
+```
+
+First-party only example:
+
+```bash
+python3 scripts/follow_scoutx.py configure \
+  --source-mode first_party \
   --topics "AI Agent,模型发布"
 ```
 
@@ -225,8 +244,9 @@ This returns a deterministic plain-text digest directly from the selected ScoutX
 Important behavior:
 
 - ScoutX is the central content source
+- X and podcast first-party content are also read from centrally prepared public feeds
 - Follow ScoutX does not maintain a separate message cache
-- every preview or delivery run fetches fresh data from the configured ScoutX public feed before filtering and formatting it
+- every preview or delivery run fetches fresh data from the configured selected public feeds before filtering and formatting it
 
 ### 5.3 Show the recommended OpenClaw cron command
 
@@ -327,6 +347,8 @@ Recommended setup questions:
 
 - daily or weekly
 - what time
+- ScoutX curated media, first-party sources, or both
+- X, podcasts, or both if first-party sources are enabled
 - what topics or companies to follow
 - what to exclude
 - which language
@@ -336,6 +358,8 @@ Do not ask the user for:
 
 - feed URLs
 - API tokens
+- X bearer tokens
+- podcast transcript API keys
 - webhook addresses
 - raw cron expressions
 
@@ -353,6 +377,9 @@ If the user asks to change tone or style in a durable way:
 - Prefer plain-language conversation over asking the user to write JSON.
 - When the user says `show my settings`, read `show-profile` and summarize it naturally.
 - When the user says `make it shorter`, update `--length short`.
+- When the user says `只看一手信息源`, update `--source-mode first_party`.
+- When the user says `只看 X 平台`, update `--source-types x`.
+- When the user says `切回 ScoutX 优质媒体源`, update `--source-mode scoutx`.
 - When the user says `focus more on builders shipping products`, add that preference to the local prompt file instead of inventing backend settings.
 - Treat backend endpoint details as implementation details hidden behind the skill.
 - In OpenClaw, prefer native cron/channel delivery over asking the user to copy shell cron lines.

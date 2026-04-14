@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import html
 import json
 import os
 from pathlib import Path
@@ -18,10 +19,45 @@ import urllib.request
 
 
 DEFAULT_FEED_URL = "http://192.144.134.94:9100/v1/public/feed"
+DEFAULT_X_FEED_URL = "https://raw.githubusercontent.com/zarazhangrui/follow-builders/main/feed-x.json"
+DEFAULT_PODCAST_FEED_URL = "https://raw.githubusercontent.com/zarazhangrui/follow-builders/main/feed-podcasts.json"
 DEFAULT_TIMEOUT_SECONDS = 20
 DEFAULT_USER_AGENT = "FollowScoutXSkill/0.1 (+https://input.reai.group)"
 PROFILE_VERSION = 1
 DEFAULT_SUMMARY_BUDGET_CHARS = 1200
+SOURCE_TYPES = ("scoutx", "x", "podcast")
+SOURCE_TYPE_LABELS = {
+    "scoutx": "ScoutX",
+    "x": "X",
+    "podcast": "Podcast",
+}
+SOURCE_TYPE_ENV_VARS = {
+    "scoutx": "FOLLOW_SCOUTX_FEED_URL",
+    "x": "FOLLOW_SCOUTX_X_FEED_URL",
+    "podcast": "FOLLOW_SCOUTX_PODCAST_FEED_URL",
+}
+SOURCE_MODE_TO_TYPES = {
+    "scoutx": ["scoutx"],
+    "curated": ["scoutx"],
+    "media": ["scoutx"],
+    "first_party": ["x", "podcast"],
+    "first-party": ["x", "podcast"],
+    "primary": ["x", "podcast"],
+    "mixed": ["scoutx", "x", "podcast"],
+    "all": ["scoutx", "x", "podcast"],
+}
+SOURCE_TYPE_ALIASES = {
+    "scoutx": "scoutx",
+    "media": "scoutx",
+    "curated": "scoutx",
+    "x": "x",
+    "twitter": "x",
+    "tweet": "x",
+    "tweets": "x",
+    "podcast": "podcast",
+    "podcasts": "podcast",
+    "播客": "podcast",
+}
 STYLE_TO_SUMMARY_BUDGET = {
     "short": 700,
     "medium": 900,
@@ -86,20 +122,39 @@ def service_config_path() -> Path:
     return skill_root() / "service.json"
 
 
-def load_service_config() -> dict[str, Any]:
-    local_path = local_service_config_path()
-    if local_path.exists():
-        return json.loads(local_path.read_text(encoding="utf-8"))
-
-    bundled_path = service_config_path()
-    if bundled_path.exists():
-        return json.loads(bundled_path.read_text(encoding="utf-8"))
-
+def default_service_config() -> dict[str, Any]:
     return {
         "feed_url": DEFAULT_FEED_URL,
+        "scoutx_feed_url": DEFAULT_FEED_URL,
+        "x_feed_url": DEFAULT_X_FEED_URL,
+        "podcast_feed_url": DEFAULT_PODCAST_FEED_URL,
         "meta_url": "",
         "timeout_seconds": DEFAULT_TIMEOUT_SECONDS,
     }
+
+
+def with_service_defaults(config: dict[str, Any]) -> dict[str, Any]:
+    merged = default_service_config()
+    merged.update(config)
+    scoutx_feed_url = str(merged.get("scoutx_feed_url") or merged.get("feed_url") or DEFAULT_FEED_URL)
+    merged["feed_url"] = str(merged.get("feed_url") or scoutx_feed_url)
+    merged["scoutx_feed_url"] = scoutx_feed_url
+    merged["x_feed_url"] = str(merged.get("x_feed_url") or DEFAULT_X_FEED_URL)
+    merged["podcast_feed_url"] = str(merged.get("podcast_feed_url") or DEFAULT_PODCAST_FEED_URL)
+    merged["timeout_seconds"] = int(merged.get("timeout_seconds") or DEFAULT_TIMEOUT_SECONDS)
+    return merged
+
+
+def load_service_config() -> dict[str, Any]:
+    local_path = local_service_config_path()
+    if local_path.exists():
+        return with_service_defaults(json.loads(local_path.read_text(encoding="utf-8")))
+
+    bundled_path = service_config_path()
+    if bundled_path.exists():
+        return with_service_defaults(json.loads(bundled_path.read_text(encoding="utf-8")))
+
+    return default_service_config()
 
 
 def is_placeholder_feed_url(url: str | None) -> bool:
@@ -141,6 +196,8 @@ def default_profile() -> dict[str, Any]:
         },
         "preferences": {
             "language": "zh-CN",
+            "source_mode": "scoutx",
+            "source_types": ["scoutx"],
             "topics": [],
             "keywords_include": [],
             "keywords_exclude": [],
@@ -168,6 +225,16 @@ def load_json(path: Path, fallback: dict[str, Any]) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def merge_missing_defaults(payload: dict[str, Any], defaults: dict[str, Any]) -> dict[str, Any]:
+    for key, value in defaults.items():
+        if key not in payload:
+            payload[key] = json.loads(json.dumps(value))
+            continue
+        if isinstance(payload[key], dict) and isinstance(value, dict):
+            merge_missing_defaults(payload[key], value)
+    return payload
+
+
 def save_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -193,7 +260,8 @@ def ensure_local_files() -> None:
 
 def load_profile() -> dict[str, Any]:
     ensure_local_files()
-    return load_json(profile_path(), default_profile())
+    profile = load_json(profile_path(), default_profile())
+    return merge_missing_defaults(profile, default_profile())
 
 
 def save_profile(profile: dict[str, Any]) -> None:
@@ -216,6 +284,8 @@ def load_prompt_texts() -> dict[str, str]:
     mapping = {
         "digest_intro": "digest_intro.md",
         "summarize_content": "summarize_content.md",
+        "summarize_tweets": "summarize_tweets.md",
+        "summarize_podcast": "summarize_podcast.md",
         "translate": "translate.md",
     }
     prompts: dict[str, str] = {}
@@ -232,6 +302,48 @@ def split_csv(value: str | None) -> list[str] | None:
     return [item for item in items if item]
 
 
+def normalize_source_type(value: str) -> str | None:
+    key = value.strip().lower().replace("-", "_")
+    if key in SOURCE_TYPE_ALIASES:
+        return SOURCE_TYPE_ALIASES[key]
+    if key == "first_party":
+        return None
+    return key if key in SOURCE_TYPES else None
+
+
+def normalize_source_types(values: list[str] | None, *, strict: bool = False) -> list[str]:
+    if not values:
+        return ["scoutx"]
+    normalized: list[str] = []
+    invalid: list[str] = []
+    for value in values:
+        source_type = normalize_source_type(value)
+        if source_type and source_type not in normalized:
+            normalized.append(source_type)
+        elif not source_type:
+            invalid.append(value)
+    if invalid and strict:
+        expected = ", ".join(SOURCE_TYPES)
+        invalid_text = ", ".join(invalid)
+        raise ValueError(f"Unknown source type(s): {invalid_text}. Expected one of: {expected}.")
+    return normalized or ["scoutx"]
+
+
+def source_types_for_mode(mode: str | None) -> list[str]:
+    if not mode:
+        return ["scoutx"]
+    key = mode.strip().lower().replace(" ", "_")
+    return list(SOURCE_MODE_TO_TYPES.get(key, ["scoutx"]))
+
+
+def profile_source_types(profile: dict[str, Any]) -> list[str]:
+    preferences = profile.get("preferences") or {}
+    configured = preferences.get("source_types")
+    if configured:
+        return normalize_source_types([str(value) for value in configured])
+    return source_types_for_mode(str(preferences.get("source_mode") or "scoutx"))
+
+
 def update_profile_from_args(profile: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
     if args.frequency:
         profile["schedule"]["frequency"] = args.frequency
@@ -242,6 +354,24 @@ def update_profile_from_args(profile: dict[str, Any], args: argparse.Namespace) 
 
     if args.language:
         profile["preferences"]["language"] = args.language
+    if args.source_mode:
+        source_types = source_types_for_mode(args.source_mode)
+        profile["preferences"]["source_mode"] = args.source_mode
+        profile["preferences"]["source_types"] = source_types
+    if args.source_types is not None:
+        try:
+            source_types = normalize_source_types(split_csv(args.source_types) or [], strict=True)
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        profile["preferences"]["source_types"] = source_types
+        if source_types == ["scoutx"]:
+            profile["preferences"]["source_mode"] = "scoutx"
+        elif source_types == ["x", "podcast"]:
+            profile["preferences"]["source_mode"] = "first_party"
+        elif source_types == ["scoutx", "x", "podcast"]:
+            profile["preferences"]["source_mode"] = "mixed"
+        else:
+            profile["preferences"]["source_mode"] = "custom"
     if args.topics is not None:
         profile["preferences"]["topics"] = split_csv(args.topics) or []
     if args.keywords_include is not None:
@@ -277,15 +407,96 @@ def item_timeout_seconds(profile: dict[str, Any]) -> int:
 
 
 def normalize_feed_item(raw: dict[str, Any]) -> dict[str, Any]:
+    source_values = raw.get("sources") or []
+    sources = [str(value).strip() for value in source_values if str(value).strip()]
     return {
-        "content_id": str(raw.get("content_id") or raw.get("id") or "").strip(),
-        "title": str(raw.get("title") or "").strip(),
-        "summary": str(raw.get("summary") or raw.get("summary_text") or raw.get("description") or "").strip(),
+        "content_id": str(raw.get("content_id") or raw.get("id") or raw.get("url") or "").strip(),
+        "source_type": "scoutx",
+        "source_label": SOURCE_TYPE_LABELS["scoutx"],
+        "title": html.unescape(str(raw.get("title") or "").strip()),
+        "summary": str(raw.get("summary") or raw.get("summary_text") or raw.get("description") or raw.get("content") or "").strip(),
         "url": str(raw.get("url") or raw.get("canonical_url") or "").strip(),
-        "published_at": str(raw.get("published_at") or "").strip(),
-        "sources": [str(value).strip() for value in raw.get("sources") or [] if str(value).strip()],
+        "published_at": str(raw.get("published_at") or raw.get("publishedAt") or "").strip(),
+        "sources": sources or [SOURCE_TYPE_LABELS["scoutx"]],
         "tags": [str(value).strip() for value in raw.get("tags") or [] if str(value).strip()],
+        "metadata": {},
     }
+
+
+def normalize_x_feed_items(feed_payload: dict[str, Any]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for account in feed_payload.get("x") or []:
+        name = str(account.get("name") or account.get("handle") or "Unknown").strip()
+        handle = str(account.get("handle") or "").strip()
+        for tweet in account.get("tweets") or []:
+            tweet_id = str(tweet.get("id") or tweet.get("url") or "").strip()
+            text = str(tweet.get("text") or "").strip()
+            if not text:
+                continue
+            title_prefix = f"@{handle}" if handle else name
+            title = f"{title_prefix}: {text.splitlines()[0][:120]}"
+            items.append(
+                {
+                    "content_id": f"x:{tweet_id}" if tweet_id else f"x:{handle}:{tweet.get('createdAt') or tweet.get('url')}",
+                    "source_type": "x",
+                    "source_label": SOURCE_TYPE_LABELS["x"],
+                    "title": title,
+                    "summary": text,
+                    "url": str(tweet.get("url") or "").strip(),
+                    "published_at": str(tweet.get("createdAt") or tweet.get("published_at") or "").strip(),
+                    "sources": [f"X / {name}", f"@{handle}" if handle else name],
+                    "tags": ["x"],
+                    "metadata": {
+                        "name": name,
+                        "handle": handle,
+                        "likes": tweet.get("likes"),
+                        "retweets": tweet.get("retweets"),
+                        "replies": tweet.get("replies"),
+                        "is_quote": tweet.get("isQuote"),
+                    },
+                }
+            )
+    return items
+
+
+def normalize_podcast_feed_items(feed_payload: dict[str, Any]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for episode in feed_payload.get("podcasts") or []:
+        name = str(episode.get("name") or "Unknown Podcast").strip()
+        title = html.unescape(str(episode.get("title") or "Untitled podcast episode").strip())
+        content = str(
+            episode.get("transcript")
+            or episode.get("content")
+            or episode.get("summary")
+            or episode.get("description")
+            or ""
+        ).strip()
+        items.append(
+            {
+                "content_id": f"podcast:{episode.get('guid') or episode.get('url') or title}",
+                "source_type": "podcast",
+                "source_label": SOURCE_TYPE_LABELS["podcast"],
+                "title": title,
+                "summary": content,
+                "url": str(episode.get("url") or "").strip(),
+                "published_at": str(episode.get("publishedAt") or episode.get("published_at") or "").strip(),
+                "sources": [f"Podcast / {name}"],
+                "tags": ["podcast"],
+                "metadata": {
+                    "name": name,
+                    "guid": episode.get("guid"),
+                },
+            }
+        )
+    return items
+
+
+def normalize_items_for_source(source_type: str, feed_payload: dict[str, Any]) -> list[dict[str, Any]]:
+    if source_type == "x":
+        return normalize_x_feed_items(feed_payload)
+    if source_type == "podcast":
+        return normalize_podcast_feed_items(feed_payload)
+    return [normalize_feed_item(item) for item in feed_payload.get("items") or []]
 
 
 def normalize_whitespace(text: str) -> str:
@@ -426,11 +637,38 @@ def compress_summary_text(text: str, *, char_budget: int = DEFAULT_SUMMARY_BUDGE
     return result[:char_budget].rstrip()
 
 
+def compress_transcript_text(text: str, *, char_budget: int = DEFAULT_SUMMARY_BUDGET_CHARS) -> str:
+    paragraphs = split_paragraphs(text)
+    if not paragraphs:
+        return ""
+    selected: list[str] = []
+    current_len = 0
+    for paragraph in paragraphs:
+        candidate_len = current_len + len(paragraph) + (2 if selected else 0)
+        if candidate_len > char_budget:
+            remaining = char_budget - current_len - (2 if selected else 0)
+            if remaining > 80:
+                selected.append(paragraph[:remaining].rstrip())
+            break
+        selected.append(paragraph)
+        current_len = candidate_len
+    return "\n\n".join(selected).strip()
+
+
+def compress_item_summary(item: dict[str, Any], *, char_budget: int = DEFAULT_SUMMARY_BUDGET_CHARS) -> str:
+    summary = str(item.get("summary") or "")
+    if item.get("source_type") == "podcast":
+        return compress_transcript_text(summary, char_budget=char_budget)
+    return compress_summary_text(summary, char_budget=char_budget)
+
+
 def item_text(item: dict[str, Any]) -> str:
     return "\n".join(
         [
-            item["title"],
-            item["summary"],
+            str(item.get("title") or ""),
+            str(item.get("summary") or ""),
+            str(item.get("source_type") or ""),
+            str(item.get("source_label") or ""),
             " ".join(item["sources"]),
             " ".join(item["tags"]),
         ]
@@ -454,12 +692,26 @@ def item_matches_profile(item: dict[str, Any], profile: dict[str, Any]) -> bool:
     return True
 
 
-def fetch_feed(*, feed_url: str | None = None, feed_file: str | None = None) -> dict[str, Any]:
+def service_feed_url(service_config: dict[str, Any], source_type: str) -> str:
+    if source_type == "x":
+        return str(service_config.get("x_feed_url") or DEFAULT_X_FEED_URL)
+    if source_type == "podcast":
+        return str(service_config.get("podcast_feed_url") or DEFAULT_PODCAST_FEED_URL)
+    return str(service_config.get("scoutx_feed_url") or service_config.get("feed_url") or DEFAULT_FEED_URL)
+
+
+def fetch_feed(
+    *,
+    source_type: str = "scoutx",
+    feed_url: str | None = None,
+    feed_file: str | None = None,
+) -> dict[str, Any]:
     if feed_file:
         return json.loads(Path(feed_file).read_text(encoding="utf-8"))
 
     service_config = load_service_config()
-    target_url = feed_url or os.getenv("FOLLOW_SCOUTX_FEED_URL", str(service_config.get("feed_url") or DEFAULT_FEED_URL))
+    env_var = SOURCE_TYPE_ENV_VARS.get(source_type, "FOLLOW_SCOUTX_FEED_URL")
+    target_url = feed_url or os.getenv(env_var, service_feed_url(service_config, source_type))
     target_url = ensure_real_feed_url(target_url)
     timeout = int(
         os.getenv(
@@ -491,11 +743,83 @@ def fetch_feed(*, feed_url: str | None = None, feed_file: str | None = None) -> 
         raise SystemExit(f"Central feed returned invalid JSON: {raw}") from exc
 
 
+def arg_value(args: argparse.Namespace, name: str) -> Any:
+    return getattr(args, name, None)
+
+
+def fetch_selected_feed_payload(profile: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    source_types = profile_source_types(profile)
+    feeds: dict[str, Any] = {}
+    errors: list[str] = []
+
+    for source_type in source_types:
+        feed_url = arg_value(args, "feed_url") if source_type == "scoutx" else arg_value(args, f"{source_type}_feed_url")
+        feed_file = arg_value(args, "feed_file") if source_type == "scoutx" else arg_value(args, f"{source_type}_feed_file")
+        if arg_value(args, "feed_file") and len(source_types) == 1 and not feed_file:
+            feed_file = arg_value(args, "feed_file")
+        try:
+            feeds[source_type] = fetch_feed(source_type=source_type, feed_url=feed_url, feed_file=feed_file)
+        except (SystemExit, OSError, json.JSONDecodeError) as exc:
+            errors.append(f"{source_type}: {exc}")
+
+    if not feeds:
+        raise SystemExit("; ".join(errors) or "No selected feeds could be loaded.")
+
+    generated_at = utcnow_iso()
+    for payload in feeds.values():
+        generated_at = str(payload.get("generated_at") or payload.get("generatedAt") or generated_at)
+        if generated_at:
+            break
+
+    return {
+        "generated_at": generated_at,
+        "source_types": source_types,
+        "feeds": feeds,
+        "errors": errors,
+    }
+
+
+def limit_items_by_source(items: list[dict[str, Any]], source_types: list[str], limit: int) -> list[dict[str, Any]]:
+    if len(source_types) <= 1:
+        return items[:limit]
+
+    buckets = {
+        source_type: [item for item in items if item.get("source_type") == source_type]
+        for source_type in source_types
+    }
+    selected: list[dict[str, Any]] = []
+    index = 0
+    while len(selected) < limit:
+        added = False
+        for source_type in source_types:
+            bucket = buckets.get(source_type) or []
+            if index < len(bucket):
+                selected.append(bucket[index])
+                added = True
+                if len(selected) >= limit:
+                    break
+        if not added:
+            break
+        index += 1
+    return selected
+
+
 def build_preview_items(profile: dict[str, Any], feed_payload: dict[str, Any]) -> list[dict[str, Any]]:
-    normalized = [normalize_feed_item(item) for item in feed_payload.get("items") or []]
+    normalized: list[dict[str, Any]] = []
+    if "feeds" in feed_payload:
+        for source_type in feed_payload.get("source_types") or profile_source_types(profile):
+            normalized.extend(normalize_items_for_source(source_type, feed_payload.get("feeds", {}).get(source_type) or {}))
+    else:
+        source_types = profile_source_types(profile)
+        if "x" in feed_payload and "x" in source_types:
+            normalized.extend(normalize_items_for_source("x", feed_payload))
+        if "podcasts" in feed_payload and "podcast" in source_types:
+            normalized.extend(normalize_items_for_source("podcast", feed_payload))
+        if "items" in feed_payload and "scoutx" in source_types:
+            normalized.extend(normalize_items_for_source("scoutx", feed_payload))
     matched = [item for item in normalized if item_matches_profile(item, profile)]
     limit = int(profile["preferences"].get("max_items", 8) or 8)
-    return matched[:limit]
+    return limit_items_by_source(matched, profile_source_types(profile), limit)
 
 
 def digest_copy(language: str) -> dict[str, str]:
@@ -548,7 +872,7 @@ def render_digest(profile: dict[str, Any], items: list[dict[str, Any]], generate
     for index, item in enumerate(items, start=1):
         source = item["sources"][0] if item["sources"] else "unknown"
         lines.append(f"{index}. {item['title']}")
-        summary = compress_summary_text(item["summary"], char_budget=per_item_budget) if item["summary"] else ""
+        summary = compress_item_summary(item, char_budget=per_item_budget) if item["summary"] else ""
         if summary:
             lines.append(summary)
         lines.append(f"{copy['source']}: {source}")
@@ -576,6 +900,8 @@ def build_prepare_digest_payload(
             "style": profile.get("style", {}),
             "schedule": profile.get("schedule", {}),
             "preferences": {
+                "source_mode": profile["preferences"].get("source_mode", "scoutx"),
+                "source_types": profile_source_types(profile),
                 "topics": profile["preferences"].get("topics", []),
                 "keywords_include": profile["preferences"].get("keywords_include", []),
                 "keywords_exclude": profile["preferences"].get("keywords_exclude", []),
@@ -585,6 +911,10 @@ def build_prepare_digest_payload(
         },
         "stats": {
             "item_count": len(items),
+            "source_counts": {
+                source_type: len([item for item in items if item.get("source_type") == source_type])
+                for source_type in SOURCE_TYPES
+            },
             "feed_generated_at": generated_at,
         },
         "processing": {
@@ -616,6 +946,7 @@ def build_prepare_digest_payload(
             "rules": [
                 "Use only the selected items in this payload.",
                 "Do not invent facts beyond title, summary_text, source, published_at, and canonical_url.",
+                "Respect item.source_type: scoutx is the curated ScoutX media feed, x is first-party X posts, and podcast is first-party podcast transcript content.",
                 "Process items one by one, not all at once.",
                 "Treat processing.per_item_timeout_seconds as the maximum target time for each item.",
                 "If an item cannot be fully produced within the allowed budget or timeout, emit the failure_template for that item instead of skipping it.",
@@ -629,16 +960,20 @@ def build_prepare_digest_payload(
         "items": [
             {
                 "content_id": item["content_id"],
+                "source_type": item.get("source_type", "scoutx"),
+                "source_label": item.get("source_label", SOURCE_TYPE_LABELS["scoutx"]),
                 "title": item["title"],
-                "summary_text": compress_summary_text(item["summary"], char_budget=per_item_budget),
+                "summary_text": compress_item_summary(item, char_budget=per_item_budget),
                 "canonical_url": item["url"],
                 "published_at": item["published_at"],
                 "sources": item["sources"],
                 "tags": item["tags"],
+                "metadata": item.get("metadata", {}),
             }
             for item in items
         ],
         "prompts": load_prompt_texts(),
+        "errors": feed_payload.get("errors") or [],
     }
 
 
@@ -673,6 +1008,14 @@ def command_configure_service(args: argparse.Namespace) -> int:
     service_config = load_service_config()
     if args.feed_url is not None:
         service_config["feed_url"] = args.feed_url
+        service_config["scoutx_feed_url"] = args.feed_url
+    if arg_value(args, "scoutx_feed_url") is not None:
+        service_config["scoutx_feed_url"] = args.scoutx_feed_url
+        service_config["feed_url"] = args.scoutx_feed_url
+    if arg_value(args, "x_feed_url") is not None:
+        service_config["x_feed_url"] = args.x_feed_url
+    if arg_value(args, "podcast_feed_url") is not None:
+        service_config["podcast_feed_url"] = args.podcast_feed_url
     if args.meta_url is not None:
         service_config["meta_url"] = args.meta_url
     if args.timeout_seconds is not None:
@@ -685,7 +1028,7 @@ def command_configure_service(args: argparse.Namespace) -> int:
 
 def command_preview(args: argparse.Namespace) -> int:
     profile = load_profile()
-    feed_payload = fetch_feed(feed_url=args.feed_url, feed_file=args.feed_file)
+    feed_payload = fetch_selected_feed_payload(profile, args)
     items = build_preview_items(profile, feed_payload)
     generated_at = str(feed_payload.get("generated_at") or utcnow_iso())
 
@@ -710,13 +1053,21 @@ def command_preview(args: argparse.Namespace) -> int:
 
 
 def command_deliver(args: argparse.Namespace) -> int:
-    preview_args = argparse.Namespace(feed_url=args.feed_url, feed_file=args.feed_file, json=False)
+    preview_args = argparse.Namespace(
+        feed_url=args.feed_url,
+        feed_file=args.feed_file,
+        x_feed_url=arg_value(args, "x_feed_url"),
+        x_feed_file=arg_value(args, "x_feed_file"),
+        podcast_feed_url=arg_value(args, "podcast_feed_url"),
+        podcast_feed_file=arg_value(args, "podcast_feed_file"),
+        json=False,
+    )
     return command_preview(preview_args)
 
 
 def command_prepare_digest(args: argparse.Namespace) -> int:
     profile = load_profile()
-    feed_payload = fetch_feed(feed_url=args.feed_url, feed_file=args.feed_file)
+    feed_payload = fetch_selected_feed_payload(profile, args)
     items = build_preview_items(profile, feed_payload)
 
     state = load_state()
@@ -751,10 +1102,38 @@ def build_openclaw_cron_expression(profile: dict[str, Any]) -> str:
     return f"{minute} {hour} * * *"
 
 
+def build_selected_feed_urls(
+    profile: dict[str, Any],
+    service_config: dict[str, Any],
+    *,
+    feed_url: str | None = None,
+    x_feed_url: str | None = None,
+    podcast_feed_url: str | None = None,
+) -> dict[str, str]:
+    explicit_urls = {
+        "scoutx": feed_url,
+        "x": x_feed_url,
+        "podcast": podcast_feed_url,
+    }
+    feed_urls: dict[str, str] = {}
+    for source_type in profile_source_types(profile):
+        env_value = os.getenv(SOURCE_TYPE_ENV_VARS[source_type])
+        resolved = explicit_urls[source_type] or env_value or service_feed_url(service_config, source_type)
+        feed_urls[source_type] = ensure_real_feed_url(resolved)
+    return feed_urls
+
+
+def feed_env_prefix(feed_urls: dict[str, str]) -> str:
+    parts = []
+    for source_type, feed_url in feed_urls.items():
+        parts.append(f"{SOURCE_TYPE_ENV_VARS[source_type]}={shlex.quote(feed_url)}")
+    return " ".join(parts)
+
+
 def build_openclaw_cron_command(
     profile: dict[str, Any],
     *,
-    feed_url: str,
+    feed_urls: dict[str, str],
     script_path: str,
     name: str,
     agent: str,
@@ -765,8 +1144,9 @@ def build_openclaw_cron_command(
 ) -> str:
     cron_expr = build_openclaw_cron_expression(profile)
     resolved_channel, resolved_to = resolve_openclaw_delivery(profile, channel=channel, to=to)
+    env_prefix = feed_env_prefix(feed_urls)
     message = (
-        f"Run `FOLLOW_SCOUTX_FEED_URL={feed_url} python3 {script_path} deliver`, "
+        f"Run `{env_prefix} python3 {script_path} deliver`, "
         "then return the command output verbatim as your final answer. "
         "Do not rewrite, summarize, or reformat it."
     )
@@ -797,7 +1177,7 @@ def build_openclaw_cron_command(
 def build_openclaw_cron_args(
     profile: dict[str, Any],
     *,
-    feed_url: str,
+    feed_urls: dict[str, str],
     script_path: str,
     name: str,
     agent: str,
@@ -808,8 +1188,9 @@ def build_openclaw_cron_args(
 ) -> list[str]:
     cron_expr = build_openclaw_cron_expression(profile)
     resolved_channel, resolved_to = resolve_openclaw_delivery(profile, channel=channel, to=to)
+    env_prefix = feed_env_prefix(feed_urls)
     message = (
-        f"Run `FOLLOW_SCOUTX_FEED_URL={feed_url} python3 {script_path} deliver`, "
+        f"Run `{env_prefix} python3 {script_path} deliver`, "
         "then return the command output verbatim as your final answer. "
         "Do not rewrite, summarize, or reformat it."
     )
@@ -870,14 +1251,17 @@ def resolve_openclaw_delivery(
 def command_show_openclaw_cron(args: argparse.Namespace) -> int:
     profile = load_profile()
     service_config = load_service_config()
-    feed_url = args.feed_url or os.getenv("FOLLOW_SCOUTX_FEED_URL", str(service_config.get("feed_url") or ""))
-    if not feed_url:
-        raise SystemExit("Missing feed URL. Configure local service.json or pass --feed-url.")
-    feed_url = ensure_real_feed_url(feed_url)
+    feed_urls = build_selected_feed_urls(
+        profile,
+        service_config,
+        feed_url=args.feed_url,
+        x_feed_url=arg_value(args, "x_feed_url"),
+        podcast_feed_url=arg_value(args, "podcast_feed_url"),
+    )
 
     command = build_openclaw_cron_command(
         profile,
-        feed_url=feed_url,
+        feed_urls=feed_urls,
         script_path=args.script_path,
         name=args.name,
         agent=args.agent,
@@ -895,7 +1279,7 @@ def command_show_openclaw_cron(args: argparse.Namespace) -> int:
             "session": args.session,
             "channel": channel,
             "to": to,
-            "feed_url": feed_url,
+            "feed_urls": feed_urls,
             "script_path": args.script_path,
             "timeout_seconds": args.timeout_seconds,
             "command": command,
@@ -911,14 +1295,17 @@ def command_show_openclaw_cron(args: argparse.Namespace) -> int:
 def command_install_openclaw_cron(args: argparse.Namespace) -> int:
     profile = load_profile()
     service_config = load_service_config()
-    feed_url = args.feed_url or os.getenv("FOLLOW_SCOUTX_FEED_URL", str(service_config.get("feed_url") or ""))
-    if not feed_url:
-        raise SystemExit("Missing feed URL. Configure local service.json or pass --feed-url.")
-    feed_url = ensure_real_feed_url(feed_url)
+    feed_urls = build_selected_feed_urls(
+        profile,
+        service_config,
+        feed_url=args.feed_url,
+        x_feed_url=arg_value(args, "x_feed_url"),
+        podcast_feed_url=arg_value(args, "podcast_feed_url"),
+    )
 
     cron_args = build_openclaw_cron_args(
         profile,
-        feed_url=feed_url,
+        feed_urls=feed_urls,
         script_path=args.script_path,
         name=args.name,
         agent=args.agent,
@@ -933,7 +1320,7 @@ def command_install_openclaw_cron(args: argparse.Namespace) -> int:
             "mode": "dry_run",
             "command": build_openclaw_cron_command(
                 profile,
-                feed_url=feed_url,
+                feed_urls=feed_urls,
                 script_path=args.script_path,
                 name=args.name,
                 agent=args.agent,
@@ -957,7 +1344,7 @@ def command_install_openclaw_cron(args: argparse.Namespace) -> int:
         "mode": "apply",
         "command": build_openclaw_cron_command(
             profile,
-            feed_url=feed_url,
+            feed_urls=feed_urls,
             script_path=args.script_path,
             name=args.name,
             agent=args.agent,
@@ -986,6 +1373,15 @@ def build_parser() -> argparse.ArgumentParser:
     configure_parser.add_argument("--time")
     configure_parser.add_argument("--days")
     configure_parser.add_argument("--language", choices=["zh-CN", "en", "bilingual"])
+    configure_parser.add_argument(
+        "--source-mode",
+        choices=["scoutx", "first_party", "mixed"],
+        help="High-level source selection: scoutx, first_party (X + podcast), or mixed",
+    )
+    configure_parser.add_argument(
+        "--source-types",
+        help="Comma-separated source types: scoutx,x,podcast",
+    )
     configure_parser.add_argument("--delivery-channel")
     configure_parser.add_argument("--delivery-target")
     configure_parser.add_argument("--topics")
@@ -1011,6 +1407,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Create or update the local service endpoint override used by this installation",
     )
     configure_service_parser.add_argument("--feed-url")
+    configure_service_parser.add_argument("--scoutx-feed-url")
+    configure_service_parser.add_argument("--x-feed-url")
+    configure_service_parser.add_argument("--podcast-feed-url")
     configure_service_parser.add_argument("--meta-url")
     configure_service_parser.add_argument("--timeout-seconds", type=int)
     configure_service_parser.set_defaults(handler=command_configure_service)
@@ -1018,6 +1417,10 @@ def build_parser() -> argparse.ArgumentParser:
     preview_parser = subparsers.add_parser("preview", help="Preview a digest using the saved local profile")
     preview_parser.add_argument("--feed-url")
     preview_parser.add_argument("--feed-file")
+    preview_parser.add_argument("--x-feed-url")
+    preview_parser.add_argument("--x-feed-file")
+    preview_parser.add_argument("--podcast-feed-url")
+    preview_parser.add_argument("--podcast-feed-file")
     preview_parser.add_argument("--json", action="store_true")
     preview_parser.set_defaults(handler=command_preview)
 
@@ -1027,6 +1430,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     deliver_parser.add_argument("--feed-url")
     deliver_parser.add_argument("--feed-file")
+    deliver_parser.add_argument("--x-feed-url")
+    deliver_parser.add_argument("--x-feed-file")
+    deliver_parser.add_argument("--podcast-feed-url")
+    deliver_parser.add_argument("--podcast-feed-file")
     deliver_parser.set_defaults(handler=command_deliver)
 
     prepare_digest_parser = subparsers.add_parser(
@@ -1035,6 +1442,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     prepare_digest_parser.add_argument("--feed-url")
     prepare_digest_parser.add_argument("--feed-file")
+    prepare_digest_parser.add_argument("--x-feed-url")
+    prepare_digest_parser.add_argument("--x-feed-file")
+    prepare_digest_parser.add_argument("--podcast-feed-url")
+    prepare_digest_parser.add_argument("--podcast-feed-file")
     prepare_digest_parser.set_defaults(handler=command_prepare_digest)
 
     openclaw_cron_parser = subparsers.add_parser(
@@ -1046,6 +1457,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--script-path",
         default=current_script_path(),
     )
+    openclaw_cron_parser.add_argument("--x-feed-url")
+    openclaw_cron_parser.add_argument("--podcast-feed-url")
     openclaw_cron_parser.add_argument("--name", default="follow-scoutx-daily")
     openclaw_cron_parser.add_argument("--agent", default="main")
     openclaw_cron_parser.add_argument("--session", default="isolated")
@@ -1064,6 +1477,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--script-path",
         default=current_script_path(),
     )
+    install_openclaw_cron_parser.add_argument("--x-feed-url")
+    install_openclaw_cron_parser.add_argument("--podcast-feed-url")
     install_openclaw_cron_parser.add_argument("--name", default="follow-scoutx-daily")
     install_openclaw_cron_parser.add_argument("--agent", default="main")
     install_openclaw_cron_parser.add_argument("--session", default="isolated")
@@ -1077,7 +1492,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ensure_local_files()
     parser = build_parser()
     args = parser.parse_args(argv)
     return args.handler(args)
