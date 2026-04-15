@@ -43,6 +43,7 @@ The end user should only configure:
 - content interests
 - source selection: ScoutX curated media, first-party sources, or both
 - first-party source selection: X, podcasts, or both
+- per-message item limits for first-party and ScoutX curated media
 - digest style
 
 The end user should not configure:
@@ -108,6 +109,7 @@ Ask only for the user-facing preferences:
 - what time
 - whether to use ScoutX curated media, first-party sources, or both
 - if using first-party sources, whether to include X, podcasts, or both
+- optional separate item caps for first-party and ScoutX curated media
 - what topics or companies to follow
 - preferred language
 - summary style
@@ -143,6 +145,7 @@ python3 scripts/follow_scoutx.py configure \
   --topics "AI Agent,编程工具" \
   --keywords-include "OpenAI,Anthropic,Cursor" \
   --max-items 8 \
+  --max-scoutx-items 8 \
   --length short
 ```
 
@@ -155,7 +158,10 @@ python3 scripts/follow_scoutx.py configure \
   --source-types "scoutx,x,podcast" \
   --delivery-channel feishu \
   --delivery-target "ou_xxx" \
-  --topics "AI Agent,模型发布"
+  --topics "AI Agent,模型发布" \
+  --max-items 10 \
+  --max-first-party-items 6 \
+  --max-scoutx-items 4
 ```
 
 First-party only example:
@@ -247,6 +253,8 @@ Important behavior:
 - X and podcast first-party content are also read from centrally prepared public feeds
 - Follow ScoutX does not maintain a separate message cache
 - every preview or delivery run fetches fresh data from the configured selected public feeds before filtering and formatting it
+- if both first-party sources and ScoutX curated media are selected, recurring OpenClaw delivery should create two message jobs: one for `--message-group first_party` and one for `--message-group scoutx`
+- by default, `max_items` is split across message groups; use `--max-first-party-items` and `--max-scoutx-items` when the user wants separate caps
 
 ### 5.3 Show the recommended OpenClaw cron command
 
@@ -325,6 +333,7 @@ Important:
 
 - prefer exact channel delivery for OpenClaw cron jobs; use `--channel last` only when the current chat context is known to be available
 - for Feishu, always pass `--channel feishu --to <target>` with a raw `ou_...` user open_id or `oc_...` group chat_id
+- when both message groups are selected, `show-openclaw-cron` and `install-openclaw-cron` should output/create two cron jobs so first-party sources and ScoutX curated media are pushed separately
 - use `deliver` as the default recurring delivery path
 - use `prepare-digest` only when you explicitly need prompt-controlled LLM remixing and have confirmed the platform path does not re-parse or rewrite the result
 - keep inbox/file output only as fallback or debugging
@@ -380,6 +389,8 @@ If the user asks to change tone or style in a durable way:
 - When the user says `只看一手信息源`, update `--source-mode first_party`.
 - When the user says `只看 X 平台`, update `--source-types x`.
 - When the user says `切回 ScoutX 优质媒体源`, update `--source-mode scoutx`.
+- When the user says `一手信息源最多 N 条`, update `--max-first-party-items N`.
+- When the user says `ScoutX 优质自媒体最多 N 条`, update `--max-scoutx-items N`.
 - When the user says `focus more on builders shipping products`, add that preference to the local prompt file instead of inventing backend settings.
 - Treat backend endpoint details as implementation details hidden behind the skill.
 - In OpenClaw, prefer native cron/channel delivery over asking the user to copy shell cron lines.

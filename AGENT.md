@@ -10,6 +10,8 @@ Follow ScoutX 是一个可安装的 agent skill，用于从中心化 ScoutX publ
 
 - 终端用户通过自然语言配置频率、时间、主题、语言、摘要风格和投递目标。
 - 终端用户可以选择 `ScoutX` 定制优质媒体源、一手信息源（X 平台与播客），或两者都看。
+- 如果两类信息源都启用，OpenClaw recurring delivery 应拆成两次推送：一手信息源一条、ScoutX 优质自媒体一条。
+- 默认条数按消息组平分；用户可以用 `--max-first-party-items` 和 `--max-scoutx-items` 分别设置上限。
 - 终端用户不应该被要求配置 `BASE_URL`、API token、feed endpoint 或 raw JSON filter。
 - 终端用户不应该被要求配置 X bearer token、播客 RSS 或转写服务 API key。
 - ScoutX 后端负责集中采集和清洗内容；本仓库的 skill 只负责本地偏好、拉取、筛选、摘要输出和 OpenClaw cron 辅助。
@@ -79,6 +81,12 @@ python3 scripts/follow_scoutx.py configure --source-mode first_party
 python3 scripts/follow_scoutx.py configure --source-types "scoutx,x,podcast"
 ```
 
+分别设置两类消息上限：
+
+```bash
+python3 scripts/follow_scoutx.py configure --max-first-party-items 6 --max-scoutx-items 4
+```
+
 查看当前 profile：
 
 ```bash
@@ -128,6 +136,7 @@ python3 scripts/follow_scoutx.py install-openclaw-cron --apply
 - 不要让普通用户配置 X API、播客 RSS、podcast transcript 服务；这些属于中心 feed/operator 责任。
 - 如果 `service.json` 指向 placeholder 域名，应把它视为 operator packaging 问题，不要向终端用户索要 feed URL。
 - 修改 OpenClaw cron 逻辑时，保持 Feishu 外部投递必须使用明确的 `--channel feishu --to <target>`。
+- 混合源 recurring delivery 必须生成两个 cron job，分别调用 `deliver --message-group first_party` 和 `deliver --message-group scoutx`。
 - 不要把 Feishu 定时任务配置成 `delivery.mode=session` + `sessionTarget=isolated`；isolated session 没有可继承的当前聊天通道。
 - 默认 recurring delivery 使用 `deliver`，只有确实需要 LLM remix 时才使用 `prepare-digest`。
 - prompt 文案应保持直接、紧凑、面向 builder，不要加入营销口吻。
