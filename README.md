@@ -171,6 +171,43 @@ skill 会把用户偏好保存在本地：
 
 OpenClaw 场景下，`follow_scoutx.py deliver` 只负责把 digest 输出到 stdout；真正的飞书发送由 OpenClaw cron 的 `--announce --channel feishu --to <target>` 完成。不要把飞书定时任务配置成 `delivery.mode=session` + `sessionTarget=isolated`，因为 isolated session 没有可继承的当前聊天通道。
 
+为了让定时任务稳定，安装前先 dry run：
+
+```bash
+python3 scripts/follow_scoutx.py install-openclaw-cron
+```
+
+确认输出里的 `delivery_diagnostics.stable` 为 `true` 后，再执行：
+
+```bash
+python3 scripts/follow_scoutx.py install-openclaw-cron --apply
+```
+
+如果诊断显示投递目标解析成 `channel=last`，默认不会直接安装。默认稳定方案是先保存明确的飞书投递目标，例如：
+
+```bash
+python3 scripts/follow_scoutx.py configure \
+  --delivery-channel feishu \
+  --delivery-target "ou_xxx"
+```
+
+如果目标是当前聊天，而不是飞书 open_id / chat_id，不要依赖 `channel=last`。使用 OpenClaw 的主会话 system event 路径：
+
+```bash
+python3 scripts/follow_scoutx.py install-openclaw-cron --main-session-system-event
+python3 scripts/follow_scoutx.py install-openclaw-cron --main-session-system-event --apply
+```
+
+只有在内部测试并确认当前 OpenClaw 安装能稳定路由 `last` 时，才使用 `install-openclaw-cron --apply --allow-channel-last`。
+
+如果需要替换已有定时任务，OpenClaw cron 不按 name 更新。可以用：
+
+```bash
+python3 scripts/follow_scoutx.py install-openclaw-cron --replace-existing --apply
+```
+
+它会先执行 `openclaw cron list --json`，按生成的 job name 找到 id，再用 `openclaw cron rm <id>` 删除后重新安装。也可以手动执行这两步。
+
 ## 当前仓库结构
 
 最关键的文件有：

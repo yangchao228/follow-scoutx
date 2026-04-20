@@ -79,8 +79,15 @@ python3 scripts/follow_scoutx.py prepare-digest
 # Show recommended cron command (dry run)
 python3 scripts/follow_scoutx.py show-openclaw-cron
 
-# Install cron job
+# Inspect install payload first; apply only when delivery_diagnostics.stable is true
+python3 scripts/follow_scoutx.py install-openclaw-cron
 python3 scripts/follow_scoutx.py install-openclaw-cron --apply
+
+# Stable current-chat route
+python3 scripts/follow_scoutx.py install-openclaw-cron --main-session-system-event --apply
+
+# Replace existing generated jobs by id before adding replacements
+python3 scripts/follow_scoutx.py install-openclaw-cron --replace-existing --apply
 ```
 
 **Validation (no test framework):**
@@ -110,8 +117,10 @@ FOLLOW_SCOUTX_HOME=/tmp/follow-scoutx-test python3 scripts/follow_scoutx.py prev
 2. **Use standard library only** - Avoid external dependencies unless absolutely necessary
 3. **Message group splitting** - When both first-party and ScoutX sources are selected, recurring delivery must create two separate cron jobs
 4. **OpenClaw delivery** - Use `deliver` for deterministic output; use `prepare-digest` only when LLM remixing is needed
-5. **Prompt style** - Keep prompts direct, compact, and builder-focused; avoid marketing language
-6. **Feed URL handling** - If `service.json` has placeholder URLs (e.g., `*.example.com`), treat it as an operator packaging issue; don't ask users for URLs
+5. **Cron delivery stability** - Default recurring delivery requires an explicit Feishu target; current-chat delivery should use `--main-session-system-event`; do not apply jobs that resolve to `channel=last` unless `--allow-channel-last` is explicitly passed after platform verification
+6. **Cron replacement** - OpenClaw cron resources are id-based, so use `--replace-existing` or `openclaw cron list --json` plus `openclaw cron rm <id>` before reinstalling generated jobs
+7. **Prompt style** - Keep prompts direct, compact, and builder-focused; avoid marketing language
+8. **Feed URL handling** - If `service.json` has placeholder URLs (e.g., `*.example.com`), treat it as an operator packaging issue; don't ask users for URLs
 
 ## Code Patterns
 

@@ -196,8 +196,8 @@ Use only when the current installation needs a specific feed endpoint, such as a
 
 ```bash
 python3 scripts/follow_scoutx.py configure-service \
-  --feed-url "http://192.144.134.94:9100/v1/public/feed" \
-  --meta-url "http://192.144.134.94:9100/v1/public/meta"
+  --feed-url "https://input.reai.group/v1/public/feed" \
+  --meta-url "https://input.reai.group/v1/public/meta"
 ```
 
 This writes the endpoint override into:
@@ -277,15 +277,18 @@ If the installation still relies on a temporary public IP, first run `configure-
 Once setup is confirmed, you can create the OpenClaw cron job directly:
 
 ```bash
+python3 scripts/follow_scoutx.py install-openclaw-cron
 python3 scripts/follow_scoutx.py install-openclaw-cron --apply
+python3 scripts/follow_scoutx.py install-openclaw-cron --replace-existing --apply
 ```
 
-Without `--apply`, the command returns a dry-run JSON payload for inspection.
+Without `--apply`, the command returns a dry-run JSON payload for inspection. Check `delivery_diagnostics.stable` before applying. The default stable path requires an explicit Feishu target. If the user wants current-chat delivery, use `--main-session-system-event` so OpenClaw routes through the main session instead of relying on `--channel last`.
 
 Use this after:
 
 1. `configure-service` is correct for the current installation
 2. the user's schedule and preferences are already saved with `configure`
+3. delivery is saved with an explicit Feishu channel and target, such as `--delivery-channel feishu --delivery-target ou_xxx`, unless the user explicitly chooses the main-session system event path for current-chat delivery
 
 ### 6. Recurring delivery in OpenClaw
 
@@ -296,18 +299,15 @@ For OpenClaw, `delivery.method=stdout` is a local skill preference: it means `fo
 
 Do not use `delivery.mode=session` with `--session isolated` for Feishu delivery. Isolated sessions do not have a previous chat channel to inherit, and this can fail with "Channel is required".
 
-Target shape for the current chat:
+Stable target shape for the current chat:
 
 ```bash
 openclaw cron add \
   --name "follow-scoutx-daily" \
   --cron "0 9 * * *" \
-  --session isolated \
   --agent main \
-  --message "Run `python3 scripts/follow_scoutx.py deliver`, then return the command output verbatim as your final answer. Do not rewrite, summarize, or reformat it." \
-  --announce \
-  --channel last \
-  --best-effort-deliver \
+  --session main \
+  --system-event "Run `python3 scripts/follow_scoutx.py deliver`, then return the command output verbatim as your final answer. Do not rewrite, summarize, or reformat it." \
   --exact \
   --timeout-seconds 120
 ```
@@ -320,7 +320,7 @@ openclaw cron add \
   --cron "0 9 * * *" \
   --session isolated \
   --agent main \
-  --message "Run `FOLLOW_SCOUTX_FEED_URL=http://192.144.134.94:9100/v1/public/feed python3 /root/work/follow-scoutx/scripts/follow_scoutx.py deliver`, then return the command output verbatim as your final answer. Do not rewrite, summarize, or reformat it." \
+  --message "Run `FOLLOW_SCOUTX_FEED_URL=https://input.reai.group/v1/public/feed python3 /root/work/follow-scoutx/scripts/follow_scoutx.py deliver`, then return the command output verbatim as your final answer. Do not rewrite, summarize, or reformat it." \
   --announce \
   --channel feishu \
   --to "ou_xxx" \
@@ -331,9 +331,12 @@ openclaw cron add \
 
 Important:
 
-- prefer exact channel delivery for OpenClaw cron jobs; use `--channel last` only when the current chat context is known to be available
+- default recurring delivery should require an explicit Feishu target
+- for current-chat delivery, use `install-openclaw-cron --main-session-system-event --apply` so OpenClaw sends a system event to the main session instead of hard-coding a target
+- `install-openclaw-cron --apply` refuses `channel=last` by default; use `--allow-channel-last` only for internal compatibility testing after manually verifying this OpenClaw installation can reliably route `last`
 - for Feishu, always pass `--channel feishu --to <target>` with a raw `ou_...` user open_id or `oc_...` group chat_id
 - when both message groups are selected, `show-openclaw-cron` and `install-openclaw-cron` should output/create two cron jobs so first-party sources and ScoutX curated media are pushed separately
+- OpenClaw cron has no name-based update; if replacing a previously installed job, use `install-openclaw-cron --replace-existing --apply`, which lists jobs with `openclaw cron list --json` and removes matching generated names by id before creating the replacement
 - use `deliver` as the default recurring delivery path
 - use `prepare-digest` only when you explicitly need prompt-controlled LLM remixing and have confirmed the platform path does not re-parse or rewrite the result
 - keep inbox/file output only as fallback or debugging
@@ -349,8 +352,11 @@ When the user enters `/follow-scoutx` or asks to enable the Follow ScoutX skill,
 4. If this OpenClaw installation needs a fixed feed endpoint, apply it with `configure-service`
 5. Offer a preview
 6. Ask whether the user wants recurring delivery in the current chat
-7. If yes, create the cron job with `install-openclaw-cron --apply`
-8. Confirm that future results will be delivered back to the current chat channel
+7. If yes, run `install-openclaw-cron` first and inspect `delivery_diagnostics`
+8. If the user wants Feishu delivery, save an explicit target and create the cron job with `install-openclaw-cron --apply`
+9. If the user wants current-chat delivery, create the cron job with `install-openclaw-cron --main-session-system-event --apply`
+10. If an existing job needs replacement, use `install-openclaw-cron --replace-existing --apply`, or manually use `openclaw cron list --json` to find the matching job id and `openclaw cron rm <id>` before adding the replacement
+11. Confirm that future results will be delivered through the configured route
 
 Recommended setup questions:
 

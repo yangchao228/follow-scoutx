@@ -18,7 +18,7 @@ import urllib.parse
 import urllib.request
 
 
-DEFAULT_FEED_URL = "http://192.144.134.94:9100/v1/public/feed"
+DEFAULT_FEED_URL = "https://input.reai.group/v1/public/feed"
 DEFAULT_X_FEED_URL = "https://raw.githubusercontent.com/zarazhangrui/follow-builders/main/feed-x.json"
 DEFAULT_PODCAST_FEED_URL = "https://raw.githubusercontent.com/zarazhangrui/follow-builders/main/feed-podcasts.json"
 DEFAULT_TIMEOUT_SECONDS = 20
@@ -1322,20 +1322,42 @@ def build_openclaw_cron_command(
     to: str | None,
     timeout_seconds: int,
     message_group: str = "all",
+    main_session_system_event: bool = False,
 ) -> str:
     cron_expr = build_openclaw_cron_expression(profile)
-    resolved_channel, resolved_to = resolve_openclaw_delivery(profile, channel=channel, to=to)
     env_prefix = feed_env_prefix(feed_urls)
     deliver_parts = ["python3", script_path, "deliver"]
     if message_group != "all":
         deliver_parts.extend(["--message-group", message_group])
     deliver_command = " ".join(shlex.quote(part) for part in deliver_parts)
     run_command = f"{env_prefix} {deliver_command}".strip()
-    message = (
+    payload = (
         f"Run `{run_command}`, "
         "then return the command output verbatim as your final answer. "
         "Do not rewrite, summarize, or reformat it."
     )
+    if main_session_system_event:
+        parts = [
+            "openclaw",
+            "cron",
+            "add",
+            "--name",
+            name,
+            "--cron",
+            cron_expr,
+            "--agent",
+            agent,
+            "--session",
+            "main",
+            "--system-event",
+            payload,
+            "--exact",
+            "--timeout-seconds",
+            str(timeout_seconds),
+        ]
+        return " ".join(shlex.quote(part) for part in parts)
+
+    resolved_channel, resolved_to = resolve_openclaw_delivery(profile, channel=channel, to=to)
     parts = [
         "openclaw",
         "cron",
@@ -1349,7 +1371,7 @@ def build_openclaw_cron_command(
         "--session",
         session,
         "--message",
-        message,
+        payload,
         "--announce",
         "--channel",
         resolved_channel,
@@ -1372,20 +1394,41 @@ def build_openclaw_cron_args(
     to: str | None,
     timeout_seconds: int,
     message_group: str = "all",
+    main_session_system_event: bool = False,
 ) -> list[str]:
     cron_expr = build_openclaw_cron_expression(profile)
-    resolved_channel, resolved_to = resolve_openclaw_delivery(profile, channel=channel, to=to)
     env_prefix = feed_env_prefix(feed_urls)
     deliver_parts = ["python3", script_path, "deliver"]
     if message_group != "all":
         deliver_parts.extend(["--message-group", message_group])
     deliver_command = " ".join(shlex.quote(part) for part in deliver_parts)
     run_command = f"{env_prefix} {deliver_command}".strip()
-    message = (
+    payload = (
         f"Run `{run_command}`, "
         "then return the command output verbatim as your final answer. "
         "Do not rewrite, summarize, or reformat it."
     )
+    if main_session_system_event:
+        return [
+            "openclaw",
+            "cron",
+            "add",
+            "--name",
+            name,
+            "--cron",
+            cron_expr,
+            "--agent",
+            agent,
+            "--session",
+            "main",
+            "--system-event",
+            payload,
+            "--exact",
+            "--timeout-seconds",
+            str(timeout_seconds),
+        ]
+
+    resolved_channel, resolved_to = resolve_openclaw_delivery(profile, channel=channel, to=to)
     args = [
         "openclaw",
         "cron",
@@ -1399,7 +1442,7 @@ def build_openclaw_cron_args(
         "--session",
         session,
         "--message",
-        message,
+        payload,
         "--announce",
         "--channel",
         resolved_channel,
@@ -1445,6 +1488,7 @@ def build_openclaw_job_specs(
     channel: str | None,
     to: str | None,
     timeout_seconds: int,
+    main_session_system_event: bool = False,
 ) -> list[dict[str, Any]]:
     message_groups = openclaw_message_groups_for_profile(profile)
     split = len(message_groups) > 1
@@ -1470,6 +1514,7 @@ def build_openclaw_job_specs(
             to=to,
             timeout_seconds=timeout_seconds,
             message_group=message_group,
+            main_session_system_event=main_session_system_event,
         )
         jobs.append(
             {
@@ -1491,6 +1536,7 @@ def build_openclaw_job_specs(
                     to=to,
                     timeout_seconds=timeout_seconds,
                     message_group=message_group,
+                    main_session_system_event=main_session_system_event,
                 ),
             }
         )
@@ -1520,9 +1566,141 @@ def resolve_openclaw_delivery(
     return raw_channel, raw_to or None
 
 
+def openclaw_delivery_diagnostics(
+    profile: dict[str, Any],
+    *,
+    channel: str | None = None,
+    to: str | None = None,
+    session: str = "isolated",
+    main_session_system_event: bool = False,
+) -> dict[str, Any]:
+    if main_session_system_event:
+        return {
+            "stable": True,
+            "delivery_mode": "main_session_system_event",
+            "channel": None,
+            "to": None,
+            "session": "main",
+            "warnings": [],
+            "recommended_action": "",
+        }
+
+    resolved_channel, resolved_to = resolve_openclaw_delivery(profile, channel=channel, to=to)
+    warnings: list[str] = []
+
+    if resolved_channel == "last":
+        warnings.append(
+            "OpenClaw channel resolves to 'last'. Scheduled jobs can lose the previous chat context; "
+            "prefer saving an explicit channel and target before installing the cron job."
+        )
+        if session == "isolated":
+            warnings.append(
+                "The job also uses an isolated session, so it cannot rely on inherited chat context. "
+                "Use --channel feishu --to <ou_xxx|oc_xxx> for Feishu, or pass --allow-channel-last "
+                "only when you have verified OpenClaw can route 'last' for this installation."
+            )
+
+    return {
+        "stable": not warnings,
+        "delivery_mode": "announce",
+        "channel": resolved_channel,
+        "to": resolved_to,
+        "session": session,
+        "warnings": warnings,
+        "recommended_action": ""
+        if not warnings
+        else "Configure an explicit delivery channel/target, then rerun install-openclaw-cron.",
+    }
+
+
+def require_stable_openclaw_delivery(diagnostics: dict[str, Any], *, allow_channel_last: bool) -> None:
+    if diagnostics.get("stable") or allow_channel_last:
+        return
+    warning_text = "\n".join(f"- {warning}" for warning in diagnostics.get("warnings", []))
+    raise SystemExit(
+        "Refusing to install an unstable OpenClaw cron delivery configuration.\n"
+        f"{warning_text}\n"
+        "Save an explicit delivery target, for example:\n"
+        "  python3 scripts/follow_scoutx.py configure --delivery-channel feishu --delivery-target ou_xxx\n"
+        "For current-chat delivery, use --main-session-system-event. "
+        "Or rerun install-openclaw-cron with --allow-channel-last after you verify this OpenClaw installation "
+        "can reliably route channel=last."
+    )
+
+
+def iter_json_objects(payload: Any) -> list[dict[str, Any]]:
+    objects: list[dict[str, Any]] = []
+    if isinstance(payload, dict):
+        objects.append(payload)
+        for value in payload.values():
+            objects.extend(iter_json_objects(value))
+    elif isinstance(payload, list):
+        for value in payload:
+            objects.extend(iter_json_objects(value))
+    return objects
+
+
+def openclaw_job_identity(job: dict[str, Any]) -> tuple[str, str]:
+    job_id = str(job.get("id") or job.get("jobId") or job.get("job_id") or "").strip()
+    job_name = str(job.get("name") or job.get("jobName") or job.get("job_name") or "").strip()
+    return job_id, job_name
+
+
+def find_openclaw_jobs_by_name(names: set[str]) -> list[dict[str, str]]:
+    completed = subprocess.run(
+        ["openclaw", "cron", "list", "--json"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        raise SystemExit(
+            "Failed to list existing OpenClaw cron jobs before replacement.\n"
+            f"stdout: {completed.stdout.strip()}\n"
+            f"stderr: {completed.stderr.strip()}"
+        )
+
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"OpenClaw cron list returned invalid JSON: {completed.stdout}") from exc
+
+    matches: list[dict[str, str]] = []
+    seen_ids: set[str] = set()
+    for job in iter_json_objects(payload):
+        job_id, job_name = openclaw_job_identity(job)
+        if not job_id or not job_name or job_name not in names or job_id in seen_ids:
+            continue
+        seen_ids.add(job_id)
+        matches.append({"id": job_id, "name": job_name})
+    return matches
+
+
+def remove_openclaw_job(job_id: str) -> dict[str, Any]:
+    completed = subprocess.run(
+        ["openclaw", "cron", "rm", job_id],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return {
+        "id": job_id,
+        "returncode": completed.returncode,
+        "stdout": completed.stdout,
+        "stderr": completed.stderr,
+    }
+
+
 def command_show_openclaw_cron(args: argparse.Namespace) -> int:
     profile = load_profile()
     service_config = load_service_config()
+    diagnostics = openclaw_delivery_diagnostics(
+        profile,
+        channel=args.channel,
+        to=args.to,
+        session=args.session,
+        main_session_system_event=args.main_session_system_event,
+    )
     jobs = build_openclaw_job_specs(
         profile,
         service_config,
@@ -1536,19 +1714,21 @@ def command_show_openclaw_cron(args: argparse.Namespace) -> int:
         channel=args.channel,
         to=args.to,
         timeout_seconds=args.timeout_seconds,
+        main_session_system_event=args.main_session_system_event,
     )
     if args.json:
-        channel, to = resolve_openclaw_delivery(profile, channel=args.channel, to=args.to)
+        channel, to = (None, None) if args.main_session_system_event else resolve_openclaw_delivery(profile, channel=args.channel, to=args.to)
         payload = {
             "name": args.name,
             "cron": build_openclaw_cron_expression(profile),
             "agent": args.agent,
-            "session": args.session,
+            "session": "main" if args.main_session_system_event else args.session,
             "channel": channel,
             "to": to,
             "mode": "split" if len(jobs) > 1 else "single",
             "script_path": args.script_path,
             "timeout_seconds": args.timeout_seconds,
+            "delivery_diagnostics": diagnostics,
             "jobs": [
                 {
                     "name": job["name"],
@@ -1569,12 +1749,21 @@ def command_show_openclaw_cron(args: argparse.Namespace) -> int:
 
     for job in jobs:
         sys.stdout.write(job["command"] + "\n")
+    for warning in diagnostics.get("warnings", []):
+        sys.stderr.write(f"Warning: {warning}\n")
     return 0
 
 
 def command_install_openclaw_cron(args: argparse.Namespace) -> int:
     profile = load_profile()
     service_config = load_service_config()
+    diagnostics = openclaw_delivery_diagnostics(
+        profile,
+        channel=args.channel,
+        to=args.to,
+        session=args.session,
+        main_session_system_event=args.main_session_system_event,
+    )
     jobs = build_openclaw_job_specs(
         profile,
         service_config,
@@ -1588,12 +1777,16 @@ def command_install_openclaw_cron(args: argparse.Namespace) -> int:
         channel=args.channel,
         to=args.to,
         timeout_seconds=args.timeout_seconds,
+        main_session_system_event=args.main_session_system_event,
     )
 
     if not args.apply:
         payload = {
             "mode": "dry_run",
             "delivery_mode": "split" if len(jobs) > 1 else "single",
+            "apply_blocked": not diagnostics["stable"] and not args.allow_channel_last,
+            "replace_existing": args.replace_existing,
+            "delivery_diagnostics": diagnostics,
             "commands": [job["command"] for job in jobs],
             "jobs": [
                 {
@@ -1611,6 +1804,25 @@ def command_install_openclaw_cron(args: argparse.Namespace) -> int:
         json.dump(payload, sys.stdout, ensure_ascii=False, indent=2)
         sys.stdout.write("\n")
         return 0
+
+    require_stable_openclaw_delivery(diagnostics, allow_channel_last=args.allow_channel_last)
+
+    removed_jobs: list[dict[str, Any]] = []
+    if args.replace_existing:
+        existing_jobs = find_openclaw_jobs_by_name({str(job["name"]) for job in jobs})
+        for existing_job in existing_jobs:
+            removed_jobs.append(remove_openclaw_job(existing_job["id"]))
+        failed_removals = [result for result in removed_jobs if result["returncode"] != 0]
+        if failed_removals:
+            payload = {
+                "mode": "apply",
+                "replace_existing": True,
+                "removed_jobs": removed_jobs,
+                "error": "Failed to remove one or more existing OpenClaw cron jobs.",
+            }
+            json.dump(payload, sys.stdout, ensure_ascii=False, indent=2)
+            sys.stdout.write("\n")
+            return 1
 
     results = []
     for job in jobs:
@@ -1633,6 +1845,8 @@ def command_install_openclaw_cron(args: argparse.Namespace) -> int:
     payload = {
         "mode": "apply",
         "delivery_mode": "split" if len(jobs) > 1 else "single",
+        "replace_existing": args.replace_existing,
+        "removed_jobs": removed_jobs,
         "results": results,
     }
     if len(results) == 1:
@@ -1761,6 +1975,11 @@ def build_parser() -> argparse.ArgumentParser:
     openclaw_cron_parser.add_argument("--channel")
     openclaw_cron_parser.add_argument("--to")
     openclaw_cron_parser.add_argument("--timeout-seconds", type=int, default=120)
+    openclaw_cron_parser.add_argument(
+        "--main-session-system-event",
+        action="store_true",
+        help="Use OpenClaw main-session system events for stable current-chat delivery instead of announce/channel delivery.",
+    )
     openclaw_cron_parser.add_argument("--json", action="store_true")
     openclaw_cron_parser.set_defaults(handler=command_show_openclaw_cron)
 
@@ -1781,6 +2000,21 @@ def build_parser() -> argparse.ArgumentParser:
     install_openclaw_cron_parser.add_argument("--channel")
     install_openclaw_cron_parser.add_argument("--to")
     install_openclaw_cron_parser.add_argument("--timeout-seconds", type=int, default=120)
+    install_openclaw_cron_parser.add_argument(
+        "--main-session-system-event",
+        action="store_true",
+        help="Use OpenClaw main-session system events for stable current-chat delivery instead of announce/channel delivery.",
+    )
+    install_openclaw_cron_parser.add_argument(
+        "--allow-channel-last",
+        action="store_true",
+        help="Allow installing a cron job that delivers to channel=last. Use only after verifying OpenClaw can route it reliably.",
+    )
+    install_openclaw_cron_parser.add_argument(
+        "--replace-existing",
+        action="store_true",
+        help="Before applying, remove existing OpenClaw cron jobs with the same generated names by listing jobs and deleting by id.",
+    )
     install_openclaw_cron_parser.add_argument("--apply", action="store_true")
     install_openclaw_cron_parser.set_defaults(handler=command_install_openclaw_cron)
 

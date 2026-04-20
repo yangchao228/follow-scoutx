@@ -123,11 +123,32 @@ python3 scripts/follow_scoutx.py show-openclaw-cron
 python3 scripts/follow_scoutx.py install-openclaw-cron
 ```
 
-确认后再执行：
+确认 dry run 输出中的 `delivery_diagnostics.stable` 为 `true` 后再执行：
 
 ```bash
 python3 scripts/follow_scoutx.py install-openclaw-cron --apply
 ```
+
+如果 `delivery_diagnostics` 显示 `channel=last`，默认不要直接安装。默认稳定策略是保存明确的飞书投递目标：
+
+```bash
+python3 scripts/follow_scoutx.py configure --delivery-channel feishu --delivery-target ou_xxx
+```
+
+如果目标是当前聊天，使用主会话 system event 路径，而不是硬编码 `last`：
+
+```bash
+python3 scripts/follow_scoutx.py install-openclaw-cron --main-session-system-event
+python3 scripts/follow_scoutx.py install-openclaw-cron --main-session-system-event --apply
+```
+
+只有在已经确认当前 OpenClaw 安装可以稳定路由 `last` 时，才加 `--allow-channel-last`。如果需要替换已有任务，优先使用：
+
+```bash
+python3 scripts/follow_scoutx.py install-openclaw-cron --replace-existing --apply
+```
+
+它会先用 `openclaw cron list --json` 过滤出 id，再用 `openclaw cron rm <id>` 删除。
 
 ## 开发约定
 
@@ -136,8 +157,11 @@ python3 scripts/follow_scoutx.py install-openclaw-cron --apply
 - 不要让普通用户配置 X API、播客 RSS、podcast transcript 服务；这些属于中心 feed/operator 责任。
 - 如果 `service.json` 指向 placeholder 域名，应把它视为 operator packaging 问题，不要向终端用户索要 feed URL。
 - 修改 OpenClaw cron 逻辑时，保持 Feishu 外部投递必须使用明确的 `--channel feishu --to <target>`。
+- 当前聊天投递使用 `--session main --system-event`，不要默认使用 `--channel last`。
 - 混合源 recurring delivery 必须生成两个 cron job，分别调用 `deliver --message-group first_party` 和 `deliver --message-group scoutx`。
+- 替换旧定时任务时使用 `--replace-existing`，不要依赖 name 更新；OpenClaw 资源管理以 id 为准。
 - 不要把 Feishu 定时任务配置成 `delivery.mode=session` + `sessionTarget=isolated`；isolated session 没有可继承的当前聊天通道。
+- 不要默认安装 `channel=last` 的 recurring job；`install-openclaw-cron --apply` 应要求显式 Feishu target 或 `--main-session-system-event`，除非用户主动传 `--allow-channel-last`。
 - 默认 recurring delivery 使用 `deliver`，只有确实需要 LLM remix 时才使用 `prepare-digest`。
 - prompt 文案应保持直接、紧凑、面向 builder，不要加入营销口吻。
 - 修改脚本行为时，同步检查 `SKILL.md` 和 `README.md` 是否需要更新。
