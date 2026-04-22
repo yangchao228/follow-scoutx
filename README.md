@@ -115,9 +115,8 @@ Agent   ❯ 已更新：
 
 龙虾示例：
 
-![img1](https://images.reai.group/images/2026/04/23/{20260423-002005_VEvUtl.png)
+![img1](https://images.reai.group/images/2026/04/23/{20260423-002005_VEvUtl.png)![img2](https://images.reai.group/images/2026/04/23/%7B20260423-001659_hOrJm4.png)
 
-![img2](https://images.reai.group/images/2026/04/23/%7B20260423-001659_hOrJm4.png)
 ---
 
 ## 快速开始
