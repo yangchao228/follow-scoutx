@@ -113,9 +113,10 @@ Agent   ❯ 已更新：
 
 这类对话的关键不是“能不能调参数”，而是用户不用理解底层采集、接口地址、JSON 过滤规则，也能完成订阅。
 
-龙虾示例：
+openclaw示例：
 
-![img1](https://images.reai.group/images/2026/04/23/{20260423-002005_VEvUtl.png)![img2](https://images.reai.group/images/2026/04/23/%7B20260423-001659_hOrJm4.png)
+![AI一手情报](https://images.reai.group/images/2026/04/23/%7B20260423-032710_BtG803.jpg)
+![AI优质媒体情报](https://images.reai.group/images/2026/04/23/%7B20260423-032710_aaIsQt.jpg)
 
 ---
 
