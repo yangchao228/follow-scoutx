@@ -208,132 +208,6 @@ agent 理想情况下只需要确认这些用户偏好：
 
 ---
 
-## 命令行能力
-
-这个仓库也提供了本地脚本，方便调试、预览、落盘配置和安装 OpenClaw 定时任务。
-
-常用命令：
-
-```bash
-python3 scripts/follow_scoutx.py configure
-python3 scripts/follow_scoutx.py show-profile
-python3 scripts/follow_scoutx.py preview
-python3 scripts/follow_scoutx.py deliver --json
-python3 scripts/follow_scoutx.py show-openclaw-cron
-python3 scripts/follow_scoutx.py install-openclaw-cron
-```
-
-一个典型的配置示例：
-
-```bash
-python3 scripts/follow_scoutx.py configure \
-  --frequency daily \
-  --time 09:00 \
-  --language zh-CN \
-  --source-types scoutx,x,podcast \
-  --delivery-channel in_chat \
-  --topics "AI Agent,编程工具" \
-  --keywords-include "OpenAI,Anthropic,Cursor" \
-  --max-items 10 \
-  --max-first-party-items 6 \
-  --max-scoutx-items 4 \
-  --length short
-```
-
-如果你只想看一手信息源：
-
-```bash
-python3 scripts/follow_scoutx.py configure \
-  --source-mode first_party \
-  --topics "AI Agent,模型发布"
-```
-
----
-
-## 本地保存的内容
-
-skill 会把用户偏好和本地状态保存在：
-
-```text
-~/.follow_scoutx/
-```
-
-常见文件包括：
-
-- `profile.json`：订阅偏好
-- `state.json`：本地运行状态
-- `prompt_sync_state.json`：本地 prompt 与内置 prompt 的同步状态
-- `service.json`：本地 service endpoint override
-- `prompts/`：本地 prompt 目录
-
-脚本运行时会自动同步内置 prompt 更新；旧版本会先备份到 `prompts/backups/`。如果你长期定制摘要风格，可以直接编辑这些文件：
-
-- `prompts/digest_intro.md`
-- `prompts/summarize_content.md`
-- `prompts/summarize_tweets.md`
-- `prompts/summarize_podcast.md`
-- `prompts/translate.md`
-
----
-
-## 定时投递
-
-OpenClaw 场景下，`follow_scoutx.py deliver` 只负责把 digest 输出到 stdout；真正的消息投递由 OpenClaw cron 的 `--announce --channel <channel> --to <target>` 完成。
-
-安装前先 dry run：
-
-```bash
-python3 scripts/follow_scoutx.py install-openclaw-cron
-```
-
-确认输出里的 `delivery_diagnostics.stable` 为 `true` 后，再执行：
-
-```bash
-python3 scripts/follow_scoutx.py install-openclaw-cron --apply
-```
-
-### 当前聊天的稳定方案
-
-如果目标是“发回当前聊天”，不要依赖 `channel=last`。优先使用 OpenClaw 主会话 system event：
-
-```bash
-python3 scripts/follow_scoutx.py install-openclaw-cron --main-session-system-event
-python3 scripts/follow_scoutx.py install-openclaw-cron --main-session-system-event --apply
-```
-
-### 飞书的稳定方案
-
-如果目标是飞书，先保存明确的投递目标：
-
-```bash
-python3 scripts/follow_scoutx.py configure \
-  --delivery-channel feishu \
-  --delivery-target "ou_xxx"
-```
-
-然后再安装定时任务。
-
-注意两点：
-
-- `--main-session-system-event` 只适用于“发回当前聊天”
-- 如果 `delivery.channel=feishu`，安装时必须使用显式 `--channel feishu --to <ou_xxx|oc_xxx>`，不要把 system event 当成飞书投递链路
-
-### 替换已有定时任务
-
-```bash
-python3 scripts/follow_scoutx.py install-openclaw-cron --replace-existing --apply
-```
-
-OpenClaw cron 不按 name 更新。这个命令会先找旧 job id，再删除后重新安装，也会顺手清理旧版本留下的 `follow-scoutx-daily-first-party` / `follow-scoutx-daily-scoutx` 遗留任务。
-
-只有在内部测试并确认当前 OpenClaw 安装能稳定路由 `last` 时，才使用：
-
-```bash
-python3 scripts/follow_scoutx.py install-openclaw-cron --apply --allow-channel-last
-```
-
----
-
 ## 工作方式
 
 输入到输出的链路是这样的：
@@ -344,48 +218,6 @@ python3 scripts/follow_scoutx.py install-openclaw-cron --apply --allow-channel-l
 4. skill 在手动执行或定时任务触发时实时拉取用户选择的 feed
 5. skill 根据本地偏好筛选内容
 6. agent 把结果组织成易读 digest
-
-也就是说：
-
-- `ScoutX` 提供中心内容源
-- `ScoutX 定制优质媒体源` 提供筛过的媒体内容
-- `X` 与 `播客` 作为一手信息源，由中心 feed 提供原始帖子和转写文本
-- `Follow ScoutX` 负责按用户偏好拉取、筛选和整理
-- `OpenClaw` 负责定时触发，并把结果发回当前聊天或飞书
-- mixed 模式默认只安装一个 recurring job，digest 内部分区排版；如果内容过长，会在投递前拆成多条连续消息
-
-它不是：
-
-- ScoutX 主动给每个用户推送消息
-- skill 自己维护一套独立内容库存
-
----
-
-## 当前仓库结构
-
-```text
-follow-scoutx/
-├── SKILL.md
-├── AGENT.md
-├── CLAUDE.md
-├── service.json
-├── scripts/
-│   └── follow_scoutx.py
-├── prompts/
-│   ├── digest_intro.md
-│   ├── summarize_content.md
-│   ├── summarize_tweets.md
-│   ├── summarize_podcast.md
-│   └── translate.md
-└── dist/
-```
-
-最关键的文件是：
-
-- `SKILL.md`：skill 行为定义
-- `service.json`：中心 feed 配置
-- `scripts/follow_scoutx.py`：本地配置、预览、递送、cron 安装入口
-- `prompts/*.md`：摘要与翻译 prompt
 
 ---
 
@@ -399,29 +231,6 @@ follow-scoutx/
 4. 再把这个 skill 仓库发给外部用户
 
 正常终端用户不应该被要求自己改 `service.json`。如果安装包里的 `service.json` 还是占位地址，那是打包或运维问题，不是用户配置问题。
-
----
-
-## 背后的判断
-
-这不是一个“多加几个 feed 源”的小工具，而是一个信息获取方式的取舍。
-
-过去很多 AI 信息流产品，默认假设是：
-
-- 用户自己会维护源
-- 用户愿意理解订阅结构
-- 用户能接受 RSS、抓取、接口、过滤规则这些概念
-
-但大多数真正需要持续获取 AI 一手信息的人，想要的是更简单的东西：
-
-- 直接说“我要看什么”
-- 不自己维护一堆源
-- 不在底层配置里迷路
-- 最终稳定收到一份可读、可用、可继续调整的 digest
-
-Follow ScoutX 想做的，就是把这条链路收口成一个更像产品而不是脚本集合的 skill。
-
-它服务的不是“信息越多越好”，而是“把真正值得跟踪的一线信号和中文上下文，持续交到用户手里”。
 
 ---
 
@@ -475,8 +284,6 @@ Follow ScoutX 想做的，就是把这条链路收口成一个更像产品而不
 `知乎`：AI生命克劳德
 
 ![知乎二维码](https://images.reai.group/images/2026/04/22/%7B20260422-235508_XcD04C.png)
-
-`GITHUB`：
 
 ---
 
